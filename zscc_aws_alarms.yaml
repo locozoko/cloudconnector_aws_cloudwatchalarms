@@ -1,0 +1,422 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Zscaler Cloud Connector CloudWatch Alarms
+Metadata:
+  LICENSE: 'Apache License, Version 2.0'
+
+#This CFT will deploy an SNS Topic, Email Subscription, and several CloudWatch Alarms for Zscaler Cloud Connectors
+#This is not a Zscaler official template
+#Metric periods can be modified but the defaults should be sufficient for most deployments
+#Deploy this CFT per GWLB Service to create alarms/alerts per Cloud Connector Group (typically done regionally)
+#This CFT assumes there are 2 Cloud Connectors. You can add/remove Cloud Connectors by copying an entire section and changing the numbers to 3,4,etc
+
+# Input Parameters Required
+Parameters:
+  CCInstance1:
+    Type: String
+    Description: Paste the first Cloud Connector Instance ID in a single Group (behind the same GWLB Service)
+    Default: i-0ce88d1d444928f50
+  CCInstance2:
+    Type: String
+    Description: Paste the second Cloud Connector Instance ID in a single Group (behind the same GWLB Service)
+    Default: i-010270a1281d7f8db
+  #For example you might have GWLB Target Group ARN: arn:aws:elasticloadbalancing:us-east-1:1234567890:targetgroup/ZSCCGWLBTargetGroup-01234567890
+  #You would paste the ARN then remove everything so the field is only left with: targetgroup/ZSCCGWLBTargetGroup-01234567890
+  GWLBTargetGroupARN:
+    Type: String
+    Description: Paste the ARN of the LB Target Group for the Cloud Connectors and remove everything before "targetgroup/"
+    Default: targetgroup/ZSCCGWLBTargetGroup-0a118feb25f9/0051493bbc3b29d4db
+    #For example you might have GWLB Service ARN: arn:aws:elasticloadbalancing:us-east-1:1234567890:loadbalancer/gwy/ZSCCGWLB-01234567890
+  #You would paste the ARN then remove everything so the field is only left with: gwy/ZSCCGWLB-01234567890
+  GWLBServiceARN:
+    Type: String
+    Description: Paste the ARN of the GWLB Service and then remove everything before "gwy/"
+    Default: gwy/ZSCCGWLB-0a118feb25f9/26679b047850525c
+  TopicEmail:
+    Type: String
+    Description:  Enter a valid Email address to subscribe to this SNS Topic (You will receive a confirmation email to verify)
+    Default: my@email.com
+  TopicName:
+    Type: String
+    Description:  Enter a name for the SNS Topic (no spaces)
+    Default: ZSCC_Alarms
+
+Resources:
+
+#Create an SNS Topic Using Email Endpoint
+ ZSCCSNSTopic: 
+   Type: AWS::SNS::Topic
+   Properties: 
+     Subscription: 
+       - Endpoint: !Ref TopicEmail
+         Protocol: "email"
+     TopicName: !Ref TopicName 
+
+#Create AWS GWLB Alarm to use with all the Cloud Connector health probes
+#Send alert after 15 minutes (3 consecutive failures at 5 minute data points)
+#This alarm applies to all Cloud Connectors behind the same GWLB Service
+ ZSCCGWLBAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC GWLB Health Probes'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: UnHealthyHostCount
+      Namespace: AWS/GatewayELB
+      Statistic: Average
+      Dimensions:
+          - Name: TargetGroup
+            Value: !Ref GWLBTargetGroupARN
+          - Name: LoadBalancer
+            Value: !Ref GWLBServiceARN
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+# Cloud Connector 1 Health Alerts
+ ZSCC1CPUAlarm: 
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName} ZSCC1 CPU Warnings'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+        - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance1
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 70
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC2CPUAlarm: 
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC2 CPU Warnings'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+        - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance2
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 70
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC1ThroughputAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC1 Throughput Warning'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      Dimensions: []
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 500
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Metrics:
+          - Id: e1
+            Label: Throughput (Mbps)
+            ReturnData: true
+            Expression: m1/300/100/100/100*8
+          - Id: m1
+            ReturnData: false
+            MetricStat:
+                Metric:
+                    Namespace: AWS/EC2
+                    MetricName: NetworkIn
+                    Dimensions:
+                        - Name: InstanceId
+                          Value: !Ref CCInstance1
+                Period: 300
+                Stat: Average
+          - Id: m2
+            ReturnData: false
+            MetricStat:
+                Metric:
+                    Namespace: AWS/EC2
+                    MetricName: NetworkOut
+                    Dimensions:
+                        - Name: InstanceId
+                          Value: !Ref CCInstance1
+                Period: 300
+                Stat: Average
+
+ ZSCC2ThroughputAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC2 Throughput Warning'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      Dimensions: []
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 500
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      Metrics:
+          - Id: e1
+            Label: Throughput (Mbps)
+            ReturnData: true
+            Expression: m1/300/100/100/100*8
+          - Id: m1
+            ReturnData: false
+            MetricStat:
+                Metric:
+                    Namespace: AWS/EC2
+                    MetricName: NetworkIn
+                    Dimensions:
+                        - Name: InstanceId
+                          Value: !Ref CCInstance2
+                Period: 300
+                Stat: Average
+          - Id: m2
+            ReturnData: false
+            MetricStat:
+                Metric:
+                    Namespace: AWS/EC2
+                    MetricName: NetworkOut
+                    Dimensions:
+                        - Name: InstanceId
+                          Value: !Ref CCInstance2
+                Period: 300
+                Stat: Average
+
+ ZSCC1FailedInstanceAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC1 Failed Instance'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: StatusCheckFailed_Instance
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance1
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC2FailedInstanceAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC2 Failed Instance'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: StatusCheckFailed_Instance
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance2
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC1FailedSystemAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC1 Failed System'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: StatusCheckFailed_System
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance1
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC2FailedSystemAlarm:
+   Type: AWS::CloudWatch::Alarm
+   Properties:
+      AlarmName: !Sub '${AWS::StackName}-ZSCC2 Failed System'
+      ActionsEnabled: true
+      OKActions: []
+      AlarmActions:
+          - !Ref ZSCCSNSTopic
+      InsufficientDataActions: []
+      MetricName: StatusCheckFailed_System
+      Namespace: AWS/EC2
+      Statistic: Average
+      Dimensions:
+          - Name: InstanceId
+            Value: !Ref CCInstance2
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+
+ ZSCC1EC2EventRule: 
+   Type: AWS::Events::Rule
+   Properties: 
+      Description: "ZS CC1 EC2 Stopped"
+      EventPattern: 
+        source:
+          - "aws.ec2"
+        detail-type: 
+          - "EC2 Instance State-change Notification"
+        detail: 
+          state: 
+          - "stopped"
+          instance-id:
+          - !Ref CCInstance1
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Ref: ZSCCSNSTopic
+          Id: "ZSCCSNSTopic"
+ ZSCC1EC2EventTopicPolicy:
+   Type: 'AWS::SNS::TopicPolicy'
+   Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudwatch.amazonaws.com
+                - events.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: "*"
+      Topics:
+        - !Ref ZSCCSNSTopic
+
+ ZSCC2EC2EventRule: 
+   Type: AWS::Events::Rule
+   Properties: 
+      Description: "ZS CC2 EC2 Stopped"
+      EventPattern: 
+        source:
+          - "aws.ec2"
+        detail-type: 
+          - "EC2 Instance State-change Notification"
+        detail: 
+          state: 
+          - "stopped"
+          instance-id:
+          - !Ref CCInstance2
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Ref: ZSCCSNSTopic
+          Id: "ZSCCSNSTopic"
+ ZSCC2EC2EventTopicPolicy:
+   Type: 'AWS::SNS::TopicPolicy'
+   Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: '*'
+      Topics:
+        - !Ref ZSCCSNSTopic
+
+Outputs: 
+  ZSCCTopicArn: 
+    Value: !Ref ZSCCSNSTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCCTopicArn"
+
+  ZSCCGWLBAlarmArn: 
+    Value: !GetAtt ZSCCGWLBAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCCGWLBAlarmArn"
+
+  ZSCC1CPUAlarmArn: 
+    Value: !GetAtt ZSCC1CPUAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC1CPUAlarmArn"
+
+  ZSCC1ThroughputAlarmArn: 
+    Value: !GetAtt ZSCC1ThroughputAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC1ThroughputAlarmArn"
+
+  ZSCC1FailedInstanceAlarmArn: 
+    Value: !GetAtt ZSCC1FailedInstanceAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC1FailedInstanceAlarmArn"
+
+  ZSCC1FailedSystemAlarmArn: 
+    Value: !GetAtt ZSCC1FailedSystemAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC1FailedSystemAlarmArn"
+
+  ZSCC2CPUAlarmArn: 
+    Value: !GetAtt ZSCC2CPUAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC2CPUAlarmArn"
+
+  ZSCC2ThroughputAlarmArn: 
+    Value: !GetAtt ZSCC2ThroughputAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC2ThroughputAlarmArn"
+
+  ZSCC2FailedInstanceAlarmArn: 
+    Value: !GetAtt ZSCC2FailedInstanceAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC2FailedInstanceAlarmArn"
+
+  ZSCC2FailedSystemAlarmArn: 
+    Value: !GetAtt ZSCC2FailedSystemAlarm.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC2FailedSystemAlarmArn"
+  
+  ZSCC2EC2EventRuleArn:
+    Value: !GetAtt ZSCC2EC2EventRule.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ZSCC2EC2EventRuleArn"
